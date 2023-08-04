@@ -18,6 +18,7 @@
 #include <termios.h>
 #include <sys/param.h>
 #include <pthread.h>
+#include <cstdint>
 
 #if defined(__linux__)
 # include <linux/serial.h>
@@ -105,7 +106,7 @@ timespec_from_ms (const uint32_t millis)
   return time;
 }
 
-Serial::SerialImpl::SerialImpl (const string &port, unsigned long baudrate,
+Serial::SerialImpl::SerialImpl (const string& port, unsigned long baudrate,
                                 bytesize_t bytesize,
                                 parity_t parity, stopbits_t stopbits,
                                 flowcontrol_t flowcontrol)
@@ -304,6 +305,36 @@ Serial::SerialImpl::reconfigurePort ()
 #endif
   default:
     custom_baud = true;
+    // OS X support
+#if defined(MAC_OS_X_VERSION_10_4) && (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4)
+    // Starting with Tiger, the IOSSIOSPEED ioctl can be used to set arbitrary baud rates
+    // other than those specified by POSIX. The driver for the underlying serial hardware
+    // ultimately determines which baud rates can be used. This ioctl sets both the input
+    // and output speed.
+    speed_t new_baud = static_cast<speed_t> (baudrate_);
+    if (-1 == ioctl(fd_, IOSSIOSPEED, &new_baud, 1)) {
+        THROW(IOException, errno);
+    }
+    // Linux Support
+#elif defined(__linux__) && defined (TIOCSSERIAL)
+    struct serial_struct ser;
+
+    if (-1 == ioctl(fd_, TIOCGSERIAL, &ser)) {
+        THROW(IOException, errno);
+    }
+
+    // set custom divisor
+    ser.custom_divisor = ser.baud_base / static_cast<int> (baudrate_);
+    // update flags
+    ser.flags &= ~ASYNC_SPD_MASK;
+    ser.flags |= ASYNC_SPD_CUST;
+
+    if (-1 == ioctl(fd_, TIOCSSERIAL, &ser)) {
+        THROW(IOException, errno);
+    }
+#else
+    throw invalid_argument("OS does not currently support custom bauds");
+#endif
   }
   if (custom_baud == false) {
 #ifdef _BSD_SOURCE
@@ -411,42 +442,7 @@ Serial::SerialImpl::reconfigurePort ()
   options.c_cc[VTIME] = 0;
 
   // activate settings
-  ::tcsetattr (fd_, TCSANOW, &options);
-
-  // apply custom baud rate, if any
-  if (custom_baud == true) {
-    // OS X support
-#if defined(MAC_OS_X_VERSION_10_4) && (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_4)
-    // Starting with Tiger, the IOSSIOSPEED ioctl can be used to set arbitrary baud rates
-    // other than those specified by POSIX. The driver for the underlying serial hardware
-    // ultimately determines which baud rates can be used. This ioctl sets both the input
-    // and output speed.
-    speed_t new_baud = static_cast<speed_t> (baudrate_);
-    // PySerial uses IOSSIOSPEED=0x80045402
-    if (-1 == ioctl (fd_, IOSSIOSPEED, &new_baud, 1)) {
-      THROW (IOException, errno);
-    }
-    // Linux Support
-#elif defined(__linux__) && defined (TIOCSSERIAL)
-    struct serial_struct ser;
-
-    if (-1 == ioctl (fd_, TIOCGSERIAL, &ser)) {
-      THROW (IOException, errno);
-    }
-
-    // set custom divisor
-    ser.custom_divisor = ser.baud_base / static_cast<int> (baudrate_);
-    // update flags
-    ser.flags &= ~ASYNC_SPD_MASK;
-    ser.flags |= ASYNC_SPD_CUST;
-
-    if (-1 == ioctl (fd_, TIOCSSERIAL, &ser)) {
-      THROW (IOException, errno);
-    }
-#else
-    throw invalid_argument ("OS does not currently support custom bauds");
-#endif
-  }
+  ::tcsetattr(fd_, TCSANOW, &options);
 
   // Update byte_time_ based on the new settings.
   uint32_t bit_time_ns = 1e9 / baudrate_;
@@ -466,11 +462,7 @@ Serial::SerialImpl::close ()
     if (fd_ != -1) {
       int ret;
       ret = ::close (fd_);
-      if (ret == 0) {
-        fd_ = -1;
-      } else {
-        THROW (IOException, errno);
-      }
+      fd_ = -1;
     }
     is_open_ = false;
   }
@@ -483,14 +475,15 @@ Serial::SerialImpl::isOpen () const
 }
 
 size_t
-Serial::SerialImpl::available ()
+Serial::SerialImpl::available()
 {
   if (!is_open_) {
     return 0;
   }
   int count = 0;
   if (-1 == ioctl (fd_, TIOCINQ, &count)) {
-      THROW (IOException, errno);
+      return 0;
+      // THROW(IOException, errno);
   } else {
       return static_cast<size_t> (count);
   }
@@ -501,10 +494,10 @@ Serial::SerialImpl::waitReadable (uint32_t timeout)
 {
   // Setup a select call to block for serial data or a timeout
   fd_set readfds;
-  FD_ZERO (&readfds);
-  FD_SET (fd_, &readfds);
-  timespec timeout_ts (timespec_from_ms (timeout));
-  int r = pselect (fd_ + 1, &readfds, NULL, NULL, &timeout_ts, NULL);
+  FD_ZERO(&readfds);
+  FD_SET(fd_, &readfds);
+  timespec timeout_ts(timespec_from_ms(timeout));
+  int r = pselect(fd_ + 1, &readfds, NULL, NULL, &timeout_ts, NULL);
 
   if (r < 0) {
     // Select was interrupted
@@ -512,16 +505,18 @@ Serial::SerialImpl::waitReadable (uint32_t timeout)
       return false;
     }
     // Otherwise there was some error
-    THROW (IOException, errno);
+    //THROW(IOException, errno);
+    return false;
   }
   // Timeout occurred
   if (r == 0) {
     return false;
   }
   // This shouldn't happen, if r > 0 our fd has to be in the list!
-  if (!FD_ISSET (fd_, &readfds)) {
-    THROW (IOException, "select reports ready to read, but our fd isn't"
-           " in the list, this shouldn't happen!");
+  if (!FD_ISSET(fd_, &readfds)) {
+    //THROW(IOException, "select reports ready to read, but our fd isn't"
+    //    " in the list, this shouldn't happen!");
+    return false;
   }
   // Data available to read.
   return true;
@@ -535,11 +530,12 @@ Serial::SerialImpl::waitByteTimes (size_t count)
 }
 
 size_t
-Serial::SerialImpl::read (uint8_t *buf, size_t size)
+Serial::SerialImpl::read (uint8_t* buf, size_t size)
 {
   // If the port is not open, throw
   if (!is_open_) {
-    throw PortNotOpenedException ("Serial::read");
+    //throw PortNotOpenedException("Serial::read");
+    return 0;
   }
   size_t bytes_read = 0;
 
@@ -580,15 +576,17 @@ Serial::SerialImpl::read (uint8_t *buf, size_t size)
       // This should be non-blocking returning only what is available now
       //  Then returning so that select can block again.
       ssize_t bytes_read_now =
-        ::read (fd_, buf + bytes_read, size - bytes_read);
+        ::read(fd_, buf + bytes_read, size - bytes_read);
       // read should always return some data as select reported it was
       // ready to read when we get to this point.
       if (bytes_read_now < 1) {
+        is_open_ = false;
+        return 0;
         // Disconnected devices, at least on Linux, show the
         // behavior that they are always ready to read immediately
         // but reading returns nothing.
-        throw SerialException ("device reports readiness to read but "
-                               "returned no data (device disconnected?)");
+        //throw SerialException ("device reports readiness to read but "
+        //                       "returned no data (device disconnected?)");
       }
       // Update bytes_read
       bytes_read += static_cast<size_t> (bytes_read_now);
@@ -602,9 +600,11 @@ Serial::SerialImpl::read (uint8_t *buf, size_t size)
       }
       // If bytes_read > size then we have over read, which shouldn't happen
       if (bytes_read > size) {
-        throw SerialException ("read over read, too many bytes where "
-                               "read, this shouldn't happen, might be "
-                               "a logical error!");
+        is_open_ = false;
+        //throw SerialException("read over read, too many bytes where "
+        //    "read, this shouldn't happen, might be "
+        //    "a logical error!");
+        return 0;
       }
     }
   }
@@ -612,10 +612,11 @@ Serial::SerialImpl::read (uint8_t *buf, size_t size)
 }
 
 size_t
-Serial::SerialImpl::write (const uint8_t *data, size_t length)
+Serial::SerialImpl::write (const uint8_t* data, size_t length)
 {
   if (is_open_ == false) {
-    throw PortNotOpenedException ("Serial::write");
+    //throw PortNotOpenedException("Serial::write");
+    return 0;
   }
   fd_set writefds;
   size_t bytes_written = 0;
@@ -651,8 +652,10 @@ Serial::SerialImpl::write (const uint8_t *data, size_t length)
       if (errno == EINTR) {
         continue;
       }
+      is_open_ = false;
       // Otherwise there was some error
-      THROW (IOException, errno);
+      //THROW(IOException, errno);
+      return 0;
     }
     /** Timeout **/
     if (r == 0) {
@@ -666,26 +669,22 @@ Serial::SerialImpl::write (const uint8_t *data, size_t length)
         ssize_t bytes_written_now =
           ::write (fd_, data + bytes_written, length - bytes_written);
 
-        // even though pselect returned readiness the call might still be 
-        // interrupted. In that case simply retry.
-        if (bytes_written_now == -1 && errno == EINTR) {
-          continue;
-        }
+        //// even though pselect returned readiness the call might still be
+        //// interrupted. In that case simply retry.
+        //if (bytes_written_now == -1 && errno == EINTR) {
+        //  continue;
+        //}
 
         // write should always return some data as select reported it was
         // ready to write when we get to this point.
         if (bytes_written_now < 1) {
+          is_open_ = false;
           // Disconnected devices, at least on Linux, show the
           // behavior that they are always ready to write immediately
           // but writing returns nothing.
-          std::stringstream strs;
-          strs << "device reports readiness to write but "
-            "returned no data (device disconnected?)";
-          strs << " errno=" << errno;
-          strs << " bytes_written_now= " << bytes_written_now;
-          strs << " bytes_written=" << bytes_written;
-          strs << " length=" << length;
-          throw SerialException(strs.str().c_str());
+          //throw SerialException("device reports readiness to write but "
+          //    "returned no data (device disconnected?)");
+          return 0;
         }
         // Update bytes_written
         bytes_written += static_cast<size_t> (bytes_written_now);
@@ -699,21 +698,25 @@ Serial::SerialImpl::write (const uint8_t *data, size_t length)
         }
         // If bytes_written > size then we have over written, which shouldn't happen
         if (bytes_written > length) {
-          throw SerialException ("write over wrote, too many bytes where "
-                                 "written, this shouldn't happen, might be "
-                                 "a logical error!");
+          is_open_ = false;
+          //throw SerialException("write over wrote, too many bytes where "
+          //    "written, this shouldn't happen, might be "
+          //    "a logical error!");
+          return 0;
         }
       }
+      is_open_ = false;
       // This shouldn't happen, if r > 0 our fd has to be in the list!
-      THROW (IOException, "select reports ready to write, but our fd isn't"
-                          " in the list, this shouldn't happen!");
+      //THROW(IOException, "select reports ready to write, but our fd isn't"
+      //    " in the list, this shouldn't happen!");
+      return 0;
     }
   }
   return bytes_written;
 }
 
 void
-Serial::SerialImpl::setPort (const string &port)
+Serial::SerialImpl::setPort (const string& port)
 {
   port_ = port;
 }
@@ -725,7 +728,7 @@ Serial::SerialImpl::getPort () const
 }
 
 void
-Serial::SerialImpl::setTimeout (serial::Timeout &timeout)
+Serial::SerialImpl::setTimeout (serial::Timeout& timeout)
 {
   timeout_ = timeout;
 }

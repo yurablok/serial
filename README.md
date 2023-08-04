@@ -27,27 +27,36 @@ Optional (for documentation):
 * [Doxygen](http://www.doxygen.org/) - Documentation generation tool
 * [graphviz](http://www.graphviz.org/) - Graph visualization software
 
-### Install
+### Example of usage
 
-Get the code:
-
-    git clone https://github.com/wjwwood/serial.git
-
-Build:
-
-    make
-
-Build and run the tests:
-
-    make test
-
-Build the documentation:
-
-    make doc
-
-Install:
-
-    make install
+```cpp
+void onProcess50Hz() {
+    try {
+        if (!m_serialPort.isOpen()) {
+            return;
+        }
+#     ifdef _WIN32
+        constexpr size_t bytesAvailable = 4096;
+        m_rxBuffer.resize(bytesAvailable);
+        m_rxBuffer.resize(m_serialPort.read(&m_rxBuffer[0], m_rxBuffer.size()));
+        for (const uint8_t byte : m_rxBuffer) {
+            onRxByte(byte);
+        }
+#     else
+        m_rxBuffer.resize(m_serialPort.available());
+        if (!m_rxBuffer.empty()) {
+            m_serialPort.read(&m_rxBuffer[0], m_rxBuffer.size());
+            for (const uint8_t byte : m_rxBuffer) {
+                onRxByte(byte);
+            }
+        }
+#     endif
+    }
+    catch (const std::exception& exc) {
+        std::cout << "Exception: " << exc.what() << std::endl;
+    }
+}
+```
 
 ### License
 

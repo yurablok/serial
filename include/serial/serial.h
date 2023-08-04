@@ -33,20 +33,18 @@
  * This provides a cross platform interface for interacting with Serial Ports.
  */
 
+#pragma once
 #ifndef SERIAL_H
 #define SERIAL_H
 
-#include <limits>
 #include <vector>
 #include <string>
-#include <cstring>
-#include <sstream>
-#include <exception>
-#include <stdexcept>
-#include <serial/v8stdint.h>
+#include <string.h>
+#include <mutex>
+#include <cstdint>
 
-#define THROW(exceptionClass, message) throw exceptionClass(__FILE__, \
-__LINE__, (message) )
+#define THROW(exceptionClass, message) \
+    throw exceptionClass(__FILE__, __LINE__, (message) )
 
 namespace serial {
 
@@ -128,11 +126,11 @@ struct Timeout {
    */
   uint32_t write_timeout_multiplier;
 
-  explicit Timeout (uint32_t inter_byte_timeout_=0,
-                    uint32_t read_timeout_constant_=0,
-                    uint32_t read_timeout_multiplier_=0,
-                    uint32_t write_timeout_constant_=0,
-                    uint32_t write_timeout_multiplier_=0)
+  explicit Timeout (uint32_t inter_byte_timeout_ = 0,
+                    uint32_t read_timeout_constant_ = 0,
+                    uint32_t read_timeout_multiplier_ = 0,
+                    uint32_t write_timeout_constant_ = 0,
+                    uint32_t write_timeout_multiplier_ = 0)
   : inter_byte_timeout(inter_byte_timeout_),
     read_timeout_constant(read_timeout_constant_),
     read_timeout_multiplier(read_timeout_multiplier_),
@@ -177,7 +175,7 @@ public:
    * \throw serial::IOException
    * \throw std::invalid_argument
    */
-  Serial (const std::string &port = "",
+  Serial (const std::string& port = std::string(),
           uint32_t baudrate = 9600,
           Timeout timeout = Timeout(),
           bytesize_t bytesize = eightbits,
@@ -262,7 +260,7 @@ public:
    * \throw serial::SerialException
    */
   size_t
-  read (uint8_t *buffer, size_t size);
+  read (uint8_t* buffer, size_t size);
 
   /*! Read a given amount of bytes from the serial port into a give buffer.
    *
@@ -276,7 +274,7 @@ public:
    * \throw serial::SerialException
    */
   size_t
-  read (std::vector<uint8_t> &buffer, size_t size = 1);
+  read (std::vector<uint8_t>& buffer, size_t size = 1);
 
   /*! Read a given amount of bytes from the serial port into a give buffer.
    *
@@ -290,7 +288,7 @@ public:
    * \throw serial::SerialException
    */
   size_t
-  read (std::string &buffer, size_t size = 1);
+  read (std::string& buffer, size_t size = 1);
 
   /*! Read a given amount of bytes from the serial port and return a string
    *  containing the data.
@@ -319,7 +317,7 @@ public:
    * \throw serial::SerialException
    */
   size_t
-  readline (std::string &buffer, size_t size = 65536, std::string eol = "\n");
+  readline (std::string& buffer, size_t size = 65536, std::string eol = "\n");
 
   /*! Reads in a line or until a given delimiter has been processed.
    *
@@ -369,7 +367,7 @@ public:
    * \throw serial::IOException
    */
   size_t
-  write (const uint8_t *data, size_t size);
+  write (const uint8_t* data, size_t size);
 
   /*! Write a string to the serial port.
    *
@@ -384,7 +382,7 @@ public:
    * \throw serial::IOException
    */
   size_t
-  write (const std::vector<uint8_t> &data);
+  write (const std::vector<uint8_t>& data);
 
   /*! Write a string to the serial port.
    *
@@ -399,7 +397,7 @@ public:
    * \throw serial::IOException
    */
   size_t
-  write (const std::string &data);
+  write (const std::string& data);
 
   /*! Sets the serial port identifier.
    *
@@ -410,7 +408,7 @@ public:
    * \throw std::invalid_argument
    */
   void
-  setPort (const std::string &port);
+  setPort (const std::string& port);
 
   /*! Gets the serial port identifier.
    *
@@ -458,7 +456,7 @@ public:
    * \see serial::Timeout
    */
   void
-  setTimeout (Timeout &timeout);
+  setTimeout (Timeout& timeout);
 
   /*! Sets the timeout for reads and writes. */
   void
@@ -654,18 +652,21 @@ private:
 
   // Pimpl idiom, d_pointer
   class SerialImpl;
-  SerialImpl *pimpl_;
+  SerialImpl* pimpl_;
 
   // Scoped Lock Classes
   class ScopedReadLock;
   class ScopedWriteLock;
 
+  std::mutex m_readMtx;
+  std::mutex m_writeMtx;
+
   // Read common function
   size_t
-  read_ (uint8_t *buffer, size_t size);
+  read_ (uint8_t* buffer, size_t size);
   // Write common function
   size_t
-  write_ (const uint8_t *data, size_t length);
+  write_ (const uint8_t* data, size_t length);
 
 };
 
@@ -675,10 +676,10 @@ class SerialException : public std::exception
   SerialException& operator=(const SerialException&);
   std::string e_what_;
 public:
-  SerialException (const char *description) {
-      std::stringstream ss;
-      ss << "SerialException " << description << " failed.";
-      e_what_ = ss.str();
+  SerialException (const char* description) {
+      e_what_ = "SerialException ";
+      e_what_ += description;
+      e_what_ += " failed.";
   }
   SerialException (const SerialException& other) : e_what_(other.e_what_) {}
   virtual ~SerialException() throw() {}
@@ -698,23 +699,31 @@ class IOException : public std::exception
 public:
   explicit IOException (std::string file, int line, int errnum)
     : file_(file), line_(line), errno_(errnum) {
-      std::stringstream ss;
 #if defined(_WIN32) && !defined(__MINGW32__)
       char error_str [1024];
       strerror_s(error_str, 1024, errnum);
 #else
-      char * error_str = strerror(errnum);
+      char* error_str = strerror(errnum);
 #endif
-      ss << "IO Exception (" << errno_ << "): " << error_str;
-      ss << ", file " << file_ << ", line " << line_ << ".";
-      e_what_ = ss.str();
+      e_what_ = "IO Exception (";
+      e_what_ += std::to_string(errno_);
+      e_what_ += "): ";
+      e_what_ += error_str;
+      e_what_ += ", file ";
+      e_what_ += file_;
+      e_what_ += ", line ";
+      e_what_ += std::to_string(line_);
+      e_what_ += ".";
   }
-  explicit IOException (std::string file, int line, const char * description)
+  explicit IOException (std::string file, int line, const char* description)
     : file_(file), line_(line), errno_(0) {
-      std::stringstream ss;
-      ss << "IO Exception: " << description;
-      ss << ", file " << file_ << ", line " << line_ << ".";
-      e_what_ = ss.str();
+      e_what_ = "IO Exception: ";
+      e_what_ += description;
+      e_what_ += ", file ";
+      e_what_ += file_;
+      e_what_ += ", line ";
+      e_what_ += std::to_string(line_);
+      e_what_ += ".";
   }
   virtual ~IOException() throw() {}
   IOException (const IOException& other) : line_(other.line_), e_what_(other.e_what_), errno_(other.errno_) {}
@@ -732,10 +741,10 @@ class PortNotOpenedException : public std::exception
   const PortNotOpenedException& operator=(PortNotOpenedException);
   std::string e_what_;
 public:
-  PortNotOpenedException (const char * description)  {
-      std::stringstream ss;
-      ss << "PortNotOpenedException " << description << " failed.";
-      e_what_ = ss.str();
+  PortNotOpenedException(const char* description) {
+      e_what_ = "PortNotOpenedException ";
+      e_what_ += description;
+      e_what_ += " failed.";
   }
   PortNotOpenedException (const PortNotOpenedException& other) : e_what_(other.e_what_) {}
   virtual ~PortNotOpenedException() throw() {}

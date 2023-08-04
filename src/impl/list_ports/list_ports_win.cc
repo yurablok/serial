@@ -8,12 +8,13 @@
  */
 
 #include "serial/serial.h"
-#include <tchar.h>
-#include <windows.h>
-#include <setupapi.h>
-#include <initguid.h>
+
+#define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
+#define NOMINMAX // Fixes the conflicts with STL
+#include <Windows.h>
+#include <Setupapi.h>
 #include <devguid.h>
-#include <cstring>
+#include <tchar.h>
 
 using serial::PortInfo;
 using std::vector;

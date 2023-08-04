@@ -1,5 +1,4 @@
 /* Copyright 2012 William Woodall and John Harrison */
-#include <algorithm>
 
 #if !defined(_WIN32) && !defined(__OpenBSD__) && !defined(__FreeBSD__)
 # include <alloca.h>
@@ -32,36 +31,6 @@ using serial::parity_t;
 using serial::stopbits_t;
 using serial::flowcontrol_t;
 
-class Serial::ScopedReadLock {
-public:
-  ScopedReadLock(SerialImpl *pimpl) : pimpl_(pimpl) {
-    this->pimpl_->readLock();
-  }
-  ~ScopedReadLock() {
-    this->pimpl_->readUnlock();
-  }
-private:
-  // Disable copy constructors
-  ScopedReadLock(const ScopedReadLock&);
-  const ScopedReadLock& operator=(ScopedReadLock);
-
-  SerialImpl *pimpl_;
-};
-
-class Serial::ScopedWriteLock {
-public:
-  ScopedWriteLock(SerialImpl *pimpl) : pimpl_(pimpl) {
-    this->pimpl_->writeLock();
-  }
-  ~ScopedWriteLock() {
-    this->pimpl_->writeUnlock();
-  }
-private:
-  // Disable copy constructors
-  ScopedWriteLock(const ScopedWriteLock&);
-  const ScopedWriteLock& operator=(ScopedWriteLock);
-  SerialImpl *pimpl_;
-};
 
 Serial::Serial (const string &port, uint32_t baudrate, serial::Timeout timeout,
                 bytesize_t bytesize, parity_t parity, stopbits_t stopbits,
@@ -123,46 +92,26 @@ Serial::read_ (uint8_t *buffer, size_t size)
 size_t
 Serial::read (uint8_t *buffer, size_t size)
 {
-  ScopedReadLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_readMtx);
   return this->pimpl_->read (buffer, size);
 }
 
 size_t
 Serial::read (std::vector<uint8_t> &buffer, size_t size)
 {
-  ScopedReadLock lock(this->pimpl_);
-  uint8_t *buffer_ = new uint8_t[size];
-  size_t bytes_read = 0;
-
-  try {
-    bytes_read = this->pimpl_->read (buffer_, size);
-  }
-  catch (const std::exception &e) {
-    delete[] buffer_;
-    throw;
-  }
-
-  buffer.insert (buffer.end (), buffer_, buffer_+bytes_read);
-  delete[] buffer_;
-  return bytes_read;
+  std::lock_guard<std::mutex> lock(m_readMtx);
+  const auto oldSize = buffer.size();
+  buffer.resize(buffer.size() + size);
+  return this->pimpl_->read(&buffer[oldSize], size);
 }
 
 size_t
 Serial::read (std::string &buffer, size_t size)
 {
-  ScopedReadLock lock(this->pimpl_);
-  uint8_t *buffer_ = new uint8_t[size];
-  size_t bytes_read = 0;
-  try {
-    bytes_read = this->pimpl_->read (buffer_, size);
-  }
-  catch (const std::exception &e) {
-    delete[] buffer_;
-    throw;
-  }
-  buffer.append (reinterpret_cast<const char*>(buffer_), bytes_read);
-  delete[] buffer_;
-  return bytes_read;
+  std::lock_guard<std::mutex> lock(m_readMtx);
+  const auto oldSize = buffer.size();
+  buffer.resize(buffer.size() + size);
+  return this->pimpl_->read(reinterpret_cast<uint8_t*>(&buffer[oldSize]), size);
 }
 
 string
@@ -176,7 +125,7 @@ Serial::read (size_t size)
 size_t
 Serial::readline (string &buffer, size_t size, string eol)
 {
-  ScopedReadLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_readMtx);
   size_t eol_len = eol.length ();
   uint8_t *buffer_ = static_cast<uint8_t*>
                               (alloca (size * sizeof (uint8_t)));
@@ -188,7 +137,7 @@ Serial::readline (string &buffer, size_t size, string eol)
     if (bytes_read == 0) {
       break; // Timeout occured on reading 1 byte
     }
-    if(read_so_far < eol_len) continue;
+    //if(read_so_far < eol_len) continue;
     if (string (reinterpret_cast<const char*>
          (buffer_ + read_so_far - eol_len), eol_len) == eol) {
       break; // EOL found
@@ -212,7 +161,7 @@ Serial::readline (size_t size, string eol)
 vector<string>
 Serial::readlines (size_t size, string eol)
 {
-  ScopedReadLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_readMtx);
   std::vector<std::string> lines;
   size_t eol_len = eol.length ();
   uint8_t *buffer_ = static_cast<uint8_t*>
@@ -230,7 +179,7 @@ Serial::readlines (size_t size, string eol)
       }
       break; // Timeout occured on reading 1 byte
     }
-    if(read_so_far < eol_len) continue;
+    //if(read_so_far < eol_len) continue;
     if (string (reinterpret_cast<const char*>
          (buffer_ + read_so_far - eol_len), eol_len) == eol) {
       // EOL found
@@ -254,7 +203,7 @@ Serial::readlines (size_t size, string eol)
 size_t
 Serial::write (const string &data)
 {
-  ScopedWriteLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_writeMtx);
   return this->write_ (reinterpret_cast<const uint8_t*>(data.c_str()),
                        data.length());
 }
@@ -262,28 +211,29 @@ Serial::write (const string &data)
 size_t
 Serial::write (const std::vector<uint8_t> &data)
 {
-  ScopedWriteLock lock(this->pimpl_);
-  return this->write_ (&data[0], data.size());
+  std::lock_guard<std::mutex> lock(m_writeMtx);
+  return this->write_(&data[0], data.size());
 }
 
 size_t
 Serial::write (const uint8_t *data, size_t size)
 {
-  ScopedWriteLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_writeMtx);
   return this->write_(data, size);
 }
 
 size_t
 Serial::write_ (const uint8_t *data, size_t length)
 {
-  return pimpl_->write (data, length);
+  return pimpl_->write(data, length);
 }
 
 void
 Serial::setPort (const string &port)
 {
-  ScopedReadLock rlock(this->pimpl_);
-  ScopedWriteLock wlock(this->pimpl_);
+  std::unique_lock<std::mutex> lockR(m_readMtx, std::defer_lock);
+  std::unique_lock<std::mutex> lockW(m_writeMtx, std::defer_lock);
+  std::lock(lockR, lockW);
   bool was_open = pimpl_->isOpen ();
   if (was_open) close();
   pimpl_->setPort (port);
@@ -369,20 +319,21 @@ Serial::getFlowcontrol () const
 
 void Serial::flush ()
 {
-  ScopedReadLock rlock(this->pimpl_);
-  ScopedWriteLock wlock(this->pimpl_);
+  std::unique_lock<std::mutex> lockR(m_readMtx, std::defer_lock);
+  std::unique_lock<std::mutex> lockW(m_writeMtx, std::defer_lock);
+  std::lock(lockR, lockW);
   pimpl_->flush ();
 }
 
 void Serial::flushInput ()
 {
-  ScopedReadLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_readMtx);
   pimpl_->flushInput ();
 }
 
 void Serial::flushOutput ()
 {
-  ScopedWriteLock lock(this->pimpl_);
+  std::lock_guard<std::mutex> lock(m_writeMtx);
   pimpl_->flushOutput ();
 }
 

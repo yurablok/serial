@@ -41,7 +41,9 @@
 
 #include "serial/serial.h"
 
-#include "windows.h"
+#define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
+#define NOMINMAX // Fixes the conflicts with STL
+#include <Windows.h>
 
 namespace serial {
 
@@ -74,7 +76,7 @@ public:
 
   size_t
   available ();
-  
+
   bool
   waitReadable (uint32_t timeout);
 
@@ -195,9 +197,9 @@ private:
   flowcontrol_t flowcontrol_; // Flow Control
 
   // Mutex used to lock the read functions
-  HANDLE read_mutex;
+  std::mutex read_mutex;
   // Mutex used to lock the write functions
-  HANDLE write_mutex;
+  std::mutex write_mutex;
 };
 
 }

@@ -10,13 +10,10 @@
 #include <vector>
 #include <string>
 #include <sstream>
-#include <stdexcept>
 #include <iostream>
 #include <fstream>
-#include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
-
 #include <glob.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -303,9 +300,9 @@ serial::list_ports()
     search_globs.push_back("/dev/ttyACM*");
     search_globs.push_back("/dev/ttyS*");
     search_globs.push_back("/dev/ttyUSB*");
+    search_globs.push_back("/dev/ttymx*");
     search_globs.push_back("/dev/tty.*");
     search_globs.push_back("/dev/cu.*");
-    search_globs.push_back("/dev/rfcomm*");
 
     vector<string> devices_found = glob( search_globs );
 
